@@ -1,0 +1,36 @@
+# Maven and Java build output
+target/
+*.class
+*.jar
+*.war
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and temporary files
+*.log
+*.pid
+*.tmp
+*.swp
+.DS_Store
+
+# Local monitoring and database data
+monitoring/data/
+monitoring/**/data/
+prometheus-data/
+grafana-data/
+loki-data/
+tempo-data/
+
+# Test and coverage output
+coverage/
+reports/

@@ -1,0 +1,55 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/shop}
+    username: ${DB_USER:shop}
+    password: ${DB_PASSWORD:shop}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 2000   # ms; fail fast so pool exhaustion is visible quickly
+  jpa:
+    open-in-view: false          # don't hold a DB connection for the whole HTTP request
+    hibernate:
+      ddl-auto: update           # creates the "orders" table automatically (demo only)
+
+# Outbound call to payment-service. Always set timeouts on remote calls.
+payment:
+  base-url: ${PAYMENT_BASE_URL:http://localhost:8082}
+  connect-timeout-ms: 500
+  read-timeout-ms: 2000
+
+# Failure-injection endpoints (/chaos/**). Practice project only: never enable in production.
+chaos:
+  enabled: ${CHAOS_ENABLED:true}
+
+management:
+  server:
+    port: 8081 # Separate from the public order API on 8080.
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus # Only the two endpoints Prometheus and probes need.
+  endpoint:
+    health:
+      show-details: never # Do not reveal database details to unauthenticated callers.
+      probes:
+        enabled: true # Enables /actuator/health/liveness and /readiness.
+        add-additional-paths: true # Also provides /livez and /readyz on port 8080.
+      group:
+        liveness:
+          include: livenessState # “Is this JVM alive?” No external dependency.
+        readiness:
+          include: readinessState,db # “Can this instance serve orders?”
+  metrics:
+    tags:
+      application: ${spring.application.name} # A finite common label on every metric.
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true # Creates *_bucket series for server p95/p99.
+        http.client.requests: true # Creates *_bucket series for the PaymentClient call.
+
+

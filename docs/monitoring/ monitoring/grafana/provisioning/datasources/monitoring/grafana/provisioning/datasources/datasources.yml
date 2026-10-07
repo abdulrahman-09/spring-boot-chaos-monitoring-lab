@@ -1,0 +1,10 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus # Dashboard JSON can refer to this stable ID.
+    type: prometheus
+    access: proxy # Grafana, rather than the browser, reaches the Docker service.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false # Change this file rather than making an undocumented UI edit.

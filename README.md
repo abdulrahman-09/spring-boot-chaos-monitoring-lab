@@ -33,6 +33,43 @@ The project contains two independent Maven services:
 
 The project uses Java 21, Spring Boot 3.5.6, PostgreSQL 16, Maven, and Docker Compose.
 
+## API endpoints
+
+`order-service` runs on port `8080` and `payment-service` runs on port `8082`. Chaos endpoints are available only when `chaos.enabled=true` (enabled by default for this demo).
+
+### order-service (`http://localhost:8080`)
+
+| Endpoint | Description | Input | Output |
+| --- | --- | --- | --- |
+| `POST /orders` | Creates an order and requests a payment. | JSON: `customerId` (text), `amount` (positive number, max 2 decimals). | `201` with `id`, `customerId`, `amount`, `status`, `createdAt`; `400` for invalid input; `502` for payment failure; `504` for payment timeout. |
+| `GET /orders/{id}` | Gets one stored order. | Order UUID in the path. | `200` with the order, or `404` if it does not exist. |
+| `GET /chaos` | Shows the current chaos state. | None. | `200` with `leakedConnections` and `heldMemoryMb`. |
+| `POST /chaos/db-leak` | Holds database connections to exhaust the HikariCP pool. | Query: `connections` (default `10`), `seconds` (default `60`). | `200` with the updated state, `acquiredNow`, and `releasedAfterSeconds`. |
+| `POST /chaos/memory` | Allocates and holds heap memory. | Query: `mb` (default `100`). | `200` with the updated chaos state. |
+| `POST /chaos/reset` | Releases held connections and memory. | None. | `200` with the reset chaos state. |
+
+### payment-service (`http://localhost:8082`)
+
+| Endpoint | Description | Input | Output |
+| --- | --- | --- | --- |
+| `POST /payments` | Processes a payment; normally called by order-service. | JSON: `orderId` (text), `amount` (positive number). | `200` with `paymentId` and `status: APPROVED`; `400` for invalid input; `500` when a chaos error is injected. |
+| `GET /chaos` | Shows the current chaos state. | None. | `200` with `latencyMs`, `errorRate`, and `heldMemoryMb`. |
+| `POST /chaos/latency` | Adds delay to each payment. | Query: `ms`. | `200` with the updated chaos state. |
+| `POST /chaos/errors` | Makes a fraction of payments fail. | Query: `rate` from `0.0` to `1.0`. | `200` with the updated chaos state. |
+| `POST /chaos/memory` | Allocates and holds heap memory. | Query: `mb` (default `100`). | `200` with the updated chaos state. |
+| `POST /chaos/reset` | Clears latency, error rate, and held memory. | None. | `200` with the reset chaos state. |
+
+### Management endpoints
+
+Use port `8081` for order-service and `8083` for payment-service.
+
+| Endpoint | Description | Input | Output |
+| --- | --- | --- | --- |
+| `GET /actuator/health` | Overall service health. | None. | `200` with health status. |
+| `GET /actuator/health/liveness` | Checks whether the application is alive. | None. | `200` with liveness status. |
+| `GET /actuator/health/readiness` | Checks whether the service can receive traffic. | None. | `200` with readiness status. |
+| `GET /actuator/prometheus` | Provides metrics for Prometheus. | None. | `200` with metrics in Prometheus text format. |
+
 ## Monitoring purpose
 
 The project is designed to show how to observe a distributed application while it is working and while it is failing.

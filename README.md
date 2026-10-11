@@ -4,115 +4,99 @@
 ![Spring Boot 3.5.6](https://img.shields.io/badge/Spring%20Boot-3.5.6-6DB33F?logo=springboot&logoColor=white)
 ![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)
-![Prometheus](https://img.shields.io/badge/Prometheus-monitoring-E6522C?logo=prometheus&logoColor=white)
-![Grafana](https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white)
+![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white)
+![Grafana](https://img.shields.io/badge/Grafana-visualization-F46800?logo=grafana&logoColor=white)
+![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-traces%20%26%20logs-7B61FF?logo=opentelemetry&logoColor=white)
 ![k6](https://img.shields.io/badge/k6-load%20testing-7D64FF?logo=k6&logoColor=white)
-![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-planned-7B61FF?logo=opentelemetry&logoColor=white)
 
-Shop is a small Spring Boot microservices project for learning monitoring and observability.
+Shop is a small Spring Boot microservices project for learning monitoring, logging, tracing, load testing, and controlled failure diagnosis.
 
 ```text
-curl / k6
+client / k6
     |
     v
 order-service :8080 ----HTTP----> payment-service :8082
+    |                                  |
+    v                                  v
+PostgreSQL :5432                 OpenTelemetry Java agent
     |
-    v
-PostgreSQL :5432
+    +-- Actuator + Micrometer --> Prometheus --> Grafana
 
-Prometheus scrapes application metrics
-Grafana displays dashboards and trends
+OpenTelemetry agents --> Collector --> Tempo (traces) --> Grafana
+                                   \-> Loki (logs)   --> Grafana
 ```
 
-## Application
+## Services and observability
 
-The project contains two independent Maven services:
+- `order-service` validates and stores orders in PostgreSQL, then calls payment-service.
+- `payment-service` is a stateless fake payment gateway that normally approves payments after a short delay.
+- Actuator and Micrometer expose application, JVM, HTTP, and HikariCP metrics. Prometheus scrapes them and Grafana displays them.
+- OpenTelemetry Java agents export traces and application logs to the OpenTelemetry Collector. The Collector sends traces to Tempo and logs to Loki.
+- Tempo also produces trace-derived metrics for Grafana Traces Drilldown. `OTEL_METRICS_EXPORTER=none`, so Micrometer remains the source of application metrics.
+- `k6/load.js` and `k6/stress.js` generate traffic for dashboards and incident drills.
 
-- `order-service` is the public API. It validates and stores orders in PostgreSQL, calls payment-service, and marks orders `PAID` or `PAYMENT_FAILED`.
-- `payment-service` is a stateless fake payment gateway. It simulates payment work and normally approves valid payments.
+Start the stack:
 
-The project uses Java 21, Spring Boot 3.5.6, PostgreSQL 16, Maven, and Docker Compose.
+```bash
+docker compose up -d --build
+```
+
+Open [Grafana](http://localhost:3000) (`admin` / `admin` for this local demo) or [Prometheus](http://localhost:9090). Use Grafana **Explore** to search Tempo traces and Loki logs.
+
+Run the stress test:
+
+```bash
+docker compose --profile load run --rm k6 run /scripts/stress.js
+```
 
 ## API endpoints
 
-`order-service` runs on port `8080` and `payment-service` runs on port `8082`. Chaos endpoints are available only when `chaos.enabled=true` (enabled by default for this demo).
+Chaos endpoints exist for learning only. They are active by default in this demo (`CHAOS_ENABLED=true`) and must not be exposed in production.
 
-### order-service (`http://localhost:8080`)
+### order-service — `http://localhost:8080`
 
-| Endpoint | Description | Input | Output |
-| --- | --- | --- | --- |
-| `POST /orders` | Creates an order and requests a payment. | JSON: `customerId` (text), `amount` (positive number, max 2 decimals). | `201` with `id`, `customerId`, `amount`, `status`, `createdAt`; `400` for invalid input; `502` for payment failure; `504` for payment timeout. |
-| `GET /orders/{id}` | Gets one stored order. | Order UUID in the path. | `200` with the order, or `404` if it does not exist. |
-| `GET /chaos` | Shows the current chaos state. | None. | `200` with `leakedConnections` and `heldMemoryMb`. |
-| `POST /chaos/db-leak` | Holds database connections to exhaust the HikariCP pool. | Query: `connections` (default `10`), `seconds` (default `60`). | `200` with the updated state, `acquiredNow`, and `releasedAfterSeconds`. |
-| `POST /chaos/memory` | Allocates and holds heap memory. | Query: `mb` (default `100`). | `200` with the updated chaos state. |
-| `POST /chaos/reset` | Releases held connections and memory. | None. | `200` with the reset chaos state. |
+| Method and endpoint | Input | Result |
+| --- | --- | --- |
+| `POST /orders` | JSON: `customerId`, positive `amount` with up to two decimal places. | `201` with the stored order; `400` invalid input; `502` payment failure; `504` payment timeout. |
+| `GET /orders/{id}` | Order UUID in the path. | `200` with the order, or `404`. |
+| `GET /chaos` | None. | Current leaked-connection and held-memory state. |
+| `POST /chaos/db-leak?connections=10&seconds=60` | Optional connection count and duration. | Holds database connections to exhaust the HikariCP pool. |
+| `POST /chaos/memory?mb=100` | Optional megabytes to hold. | Allocates and retains heap memory. |
+| `POST /chaos/reset` | None. | Releases held connections and memory. |
+| `GET /livez` | None. | Liveness probe. |
+| `GET /readyz` | None. | Readiness probe; includes the database check. |
 
-### payment-service (`http://localhost:8082`)
+### payment-service — `http://localhost:8082`
 
-| Endpoint | Description | Input | Output |
-| --- | --- | --- | --- |
-| `POST /payments` | Processes a payment; normally called by order-service. | JSON: `orderId` (text), `amount` (positive number). | `200` with `paymentId` and `status: APPROVED`; `400` for invalid input; `500` when a chaos error is injected. |
-| `GET /chaos` | Shows the current chaos state. | None. | `200` with `latencyMs`, `errorRate`, and `heldMemoryMb`. |
-| `POST /chaos/latency` | Adds delay to each payment. | Query: `ms`. | `200` with the updated chaos state. |
-| `POST /chaos/errors` | Makes a fraction of payments fail. | Query: `rate` from `0.0` to `1.0`. | `200` with the updated chaos state. |
-| `POST /chaos/memory` | Allocates and holds heap memory. | Query: `mb` (default `100`). | `200` with the updated chaos state. |
-| `POST /chaos/reset` | Clears latency, error rate, and held memory. | None. | `200` with the reset chaos state. |
+| Method and endpoint | Input | Result |
+| --- | --- | --- |
+| `POST /payments` | JSON: `orderId`, positive `amount`. Normally called by order-service. | `200` with `paymentId` and `status`; `400` invalid input; `500` when chaos errors are enabled. |
+| `GET /chaos` | None. | Current latency, error-rate, and held-memory state. |
+| `POST /chaos/latency?ms=2000` | Required delay in milliseconds. | Adds delay to every payment. |
+| `POST /chaos/errors?rate=1.0` | Required failure fraction from `0.0` to `1.0`. | Makes that fraction of payments fail. |
+| `POST /chaos/memory?mb=100` | Optional megabytes to hold. | Allocates and retains heap memory. |
+| `POST /chaos/reset` | None. | Clears all payment chaos state. |
+| `GET /livez` | None. | Liveness probe. |
+| `GET /readyz` | None. | Readiness probe. |
 
 ### Management endpoints
 
-Use port `8081` for order-service and `8083` for payment-service.
+Actuator is deliberately separated from the public APIs. Prometheus reaches these ports inside the Docker network; Compose does not publish them to the host.
 
-| Endpoint | Description | Input | Output |
-| --- | --- | --- | --- |
-| `GET /actuator/health` | Overall service health. | None. | `200` with health status. |
-| `GET /actuator/health/liveness` | Checks whether the application is alive. | None. | `200` with liveness status. |
-| `GET /actuator/health/readiness` | Checks whether the service can receive traffic. | None. | `200` with readiness status. |
-| `GET /actuator/prometheus` | Provides metrics for Prometheus. | None. | `200` with metrics in Prometheus text format. |
+| Service | Management port | Endpoints |
+| --- | ---: | --- |
+| order-service | `8081` | `GET /actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, `/actuator/prometheus` |
+| payment-service | `8083` | `GET /actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, `/actuator/prometheus` |
 
-## Monitoring purpose
+## Failure drills
 
-The project is designed to show how to observe a distributed application while it is working and while it is failing.
+Use chaos endpoints while running k6, then inspect metrics, traces, and logs in Grafana.
 
-Prometheus collects application metrics such as:
-
-- HTTP request rate and status codes
-- Request duration and percentiles
-- JVM heap and garbage collection
-- HikariCP database connection-pool usage
-- Business outcomes such as paid and failed orders
-
-Grafana is used to visualize these metrics in dashboards. The dashboards help answer questions such as:
-
-- Are requests failing or becoming slower?
-- Which service or endpoint is affected?
-- Is payment-service slower than order-service expects?
-- Is the database connection pool saturated?
-- Is JVM memory increasing?
-- Are failed orders caused by payment errors, timeouts, or infrastructure problems?
-
-The `k6` scripts generate normal traffic and ramping stress so that changes in latency, errors, resource usage, and throughput can be observed over time.
-
-## Chaos testing
-
-The services include local-only failure switches. They deliberately create conditions that monitoring should reveal:
-
-- Payment latency can make order-service return `504` timeouts.
-- Injected payment errors make payment-service return `500` and order-service return `502`.
-- A database connection leak can exhaust the order-service HikariCP pool.
-- Repeated memory allocation can increase heap and garbage-collection activity and eventually restart a container.
-- Stopping payment-service tests dependency failure while existing order reads may still work.
+- Payment latency above the order-service read timeout causes `504` responses.
+- Payment errors cause payment-service `500` responses and order-service `502` responses.
+- A database connection leak starves the order-service HikariCP pool.
+- Repeated memory allocations increase heap usage and can restart a container after an out-of-memory error.
+- Stopping payment-service tests a dependency outage; existing order reads can still work.
 - Stopping PostgreSQL tests database failure and order-service readiness.
 
-The purpose is not to make the application reliable by itself. The purpose is to practice the complete monitoring cycle:
-
-```text
-generate traffic
-    -> create a controlled failure
-    -> observe metrics in Grafana
-    -> identify the affected service and resource
-    -> confirm the behavior in application logs
-    -> reset the failure and verify recovery
-```
-
-This is a learning project. The demo credentials, automatic database schema updates, and chaos endpoints must not be used as-is in production.
+This is a learning project. The default credentials, database configuration, automatic schema updates, public API ports, and chaos endpoints are not production-safe defaults.

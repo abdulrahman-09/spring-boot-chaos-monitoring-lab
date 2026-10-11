@@ -11,20 +11,7 @@
 
 Shop is a small Spring Boot microservices project for learning monitoring, logging, tracing, load testing, and controlled failure diagnosis.
 
-```text
-client / k6
-    |
-    v
-order-service :8080 ----HTTP----> payment-service :8082
-    |                                  |
-    v                                  v
-PostgreSQL :5432                 OpenTelemetry Java agent
-    |
-    +-- Actuator + Micrometer --> Prometheus --> Grafana
-
-OpenTelemetry agents --> Collector --> Tempo (traces) --> Grafana
-                                   \-> Loki (logs)   --> Grafana
-```
+![Shop observability architecture](docs/observability-digram.png)
 
 ## Services and observability
 

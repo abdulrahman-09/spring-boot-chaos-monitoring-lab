@@ -19,9 +19,8 @@ services:
     build: ./payment-service
     ports:
       - "8082:8082"
-    environment:
-      # Small heap + exit on OOM, so the memory drill ends in a visible container restart
-      JAVA_OPTS: "-Xmx256m -XX:+ExitOnOutOfMemoryError"
+    env_file:
+      - ./payment-service/payment-service.environment
     mem_limit: 512m
     restart: unless-stopped
 
@@ -29,8 +28,9 @@ services:
     build: ./order-service
     ports:
       - "8080:8080"
+    env_file:
+      - ./order-service/order-service.environment
     environment:
-      JAVA_OPTS: "-Xmx256m -XX:+ExitOnOutOfMemoryError"
       DB_URL: jdbc:postgresql://postgres:5432/shop
       DB_USER: shop
       DB_PASSWORD: shop
@@ -49,6 +49,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver # Accept trace-derived metrics from Tempo.
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
@@ -65,9 +66,12 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+      - tempo
+      - loki
     restart: unless-stopped
 
   # Load generator. Run on demand:  docker compose run --rm k6
@@ -81,8 +85,51 @@ services:
     command: run /scripts/load.js
     depends_on:
       - order-service
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: ["-config.file=/etc/tempo/config.yml"]
+    ports:
+      - "127.0.0.1:3200:3200" # Grafana uses the internal service address.
+    volumes:
+      - ./monitoring/tempo/tempo.yml:/etc/tempo/config.yml:ro
+      - tempo-data:/data/tempo
+    depends_on:
+      tempo-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  tempo-init:
+    image: busybox:1.37.0
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 10001:10001 /data/tempo"]
+    volumes:
+      - tempo-data:/data/tempo
+    restart: "no"
+
+  loki:
+    image: grafana/loki:3.5.0
+    command: ["-config.file=/etc/loki/config.yml"]
+    user: "0:0"
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.130.0
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./monitoring/otel-collector/config.yml:/etc/otelcol/config.yml:ro
+    depends_on:
+      - tempo
+      - loki
+    restart: unless-stopped
 
 volumes:
   pgdata:
   prometheus-data:
   grafana-data:
+  tempo-data:
+  loki-data:

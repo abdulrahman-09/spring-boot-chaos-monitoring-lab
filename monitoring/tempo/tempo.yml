@@ -1,0 +1,45 @@
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200 # Grafana queries this HTTP API.
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317 # Bind beyond localhost for Docker networking.
+
+# Generate RED and service-graph metrics from newly received traces. Grafana
+# Traces Drilldown queries these metrics through Tempo's metrics generator.
+metrics_generator:
+  storage:
+    path: /data/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  # Tempo 2.7's local-blocks processor needs its own trace WAL for TraceQL
+  # metrics queries. This is separate from Tempo's primary trace storage.
+  traces_storage:
+    path: /data/tempo/generator/traces
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors:
+        # Required by Tempo 2.7 for TraceQL metric queries used by Grafana
+        # Traces Drilldown. Tempo 3 removes this processor, but this stack runs 2.7.2.
+        - local-blocks
+        - span-metrics
+        - service-graphs
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /data/tempo/wal
+    local:
+      path: /data/tempo/blocks
+
+usage_report:
+  reporting_enabled: false
